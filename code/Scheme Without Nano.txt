@@ -1,0 +1,304 @@
+#include "SoftwareSerial.h"
+#include "DFRobotDFPlayerMini.h"
+#include "TM1637.h"
+#include <SPI.h>
+#include <TimedAction.h>
+#include <Adafruit_GFX.h>
+#include <Max72xxPanel.h>
+
+//Определяем пины для подключения к плате Arduino
+#define CLK 10
+#define DIO 12
+//Создаём объект класса TM1637, в качестве параметров
+//передаём номера пинов подключения
+TM1637 tml1637(CLK, DIO);
+
+#define LEDPinRadio A0
+#define LEDPin A1
+
+#define Movement 4
+#define AButton 5
+#define BButton 6
+#define CButton 7
+#define DButton 8
+
+//MAX7219
+int pinCS = 9; // Подключаем CS к 9-му пину, DIN к MOSI и CLK к SCK
+int numberOfHorizontalDisplays = 1; // Количество модулей по горизонтали
+int numberOfVerticalDisplays = 8; // Количество модулей по вертикали
+Max72xxPanel matrix = Max72xxPanel(pinCS, numberOfHorizontalDisplays, numberOfVerticalDisplays);
+String tape = "";
+int wait = 10; // Скорость прокрутки в миллисикундах
+int spacer = 1; // Промежуток между символами (кол-во точек)
+int width = 5 + spacer; // Ширина символа
+
+// DFPlayer Mini
+unsigned long previousMillis = 0;
+unsigned long previousMillisLed = 0;
+unsigned long previousMillisThread = 0;
+unsigned long interval = 1000;
+
+int Track_Duration = 10;
+int Player_Track = 1;
+int Player_Vol = 20;
+int counter_started = 0;
+
+static const uint8_t PIN_MP3_TX = 2; // Connects to module's RX
+static const uint8_t PIN_MP3_RX = 3; // Connects to module's TX
+
+SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
+DFRobotDFPlayerMini player;
+
+
+int Buttons(int Player_Track, int Player_Vol){
+  int A_Btn_Val = digitalRead(AButton);
+  int B_Btn_Val = digitalRead(BButton);
+  int C_Btn_Val = digitalRead(CButton);
+  int D_Btn_Val = digitalRead(DButton);
+
+  Serial.println(A_Btn_Val);
+  //Проверяем нажатие кнопки и переключаем трэк вперёд
+  if(A_Btn_Val){
+    digitalWrite(LEDPinRadio, HIGH);
+    if(Player_Track != 38){
+      Player_Track++;
+      player.next();
+    }else{
+      Player_Track = 1;
+      player.next();
+    }
+    player.next();
+    delay(1000);
+    digitalWrite(LEDPinRadio, LOW);
+  }
+  //Проверяем нажатие кнопки и прибавляем звук
+  if(B_Btn_Val){
+     digitalWrite(LEDPinRadio, HIGH);
+    if(Player_Vol != 30){
+      Player_Vol = Player_Vol + 2;
+    }
+    player.volume(Player_Vol);
+    delay(1000);
+    digitalWrite(LEDPinRadio, LOW);
+  }
+  //Проверяем нажатие кнопки и переключаем трэк назад
+  if(C_Btn_Val){
+    digitalWrite(LEDPinRadio, HIGH);
+    if(Player_Track != 1){
+      Player_Track--;
+      player.previous();
+    }else{
+      Player_Track = 38;
+      player.previous();
+    }
+    delay(1000);
+    digitalWrite(LEDPinRadio, LOW);
+  }
+  //Проверяем нажатие кнопки и убавляем звук
+  if(D_Btn_Val){
+   digitalWrite(LEDPinRadio, HIGH);
+    if(Player_Vol != 30){
+      Player_Vol = Player_Vol - 2;
+    }
+    player.volume(Player_Vol);
+    delay(1000);
+    digitalWrite(LEDPinRadio, LOW);
+  }
+  return Player_Track, Player_Vol;
+}
+TimedAction ButtonThread = TimedAction(200, Buttons);
+
+void Main_queue(){
+  unsigned long currentMillis = millis();
+
+  int Mov_Val = digitalRead(Movement);
+
+
+  ButtonThread.check();
+  //Обновляем Led каждые полсекунды, что бы цифры не моргали
+  // if(currentMillis - previousMillisLed > 1000){
+  //   tm1637.display(Led_Msg);
+  //   previousMillisLed = currentMillis;
+  // }
+
+
+  if(Mov_Val == HIGH){
+    counter_started = 1;
+    Track_Duration = 10;
+    digitalWrite(LEDPin, HIGH);
+
+  }
+  if(counter_started != 0){
+
+    player.volume(Player_Vol);
+    player.start();
+
+    if(currentMillis - previousMillis > 1000){
+    /* The Arduino executes this code once every second
+    *  (interval = 1000 (ms) = 1 second).
+    */
+
+      if(Track_Duration > 0){
+        Track_Duration--;
+      }else{
+        player.volume(17);
+        delay(300);
+        player.volume(14);
+        delay(300);
+        player.volume(11);
+        delay(300);
+        player.volume(8);
+        delay(300);
+        player.volume(5);
+        delay(300);
+        player.volume(2);
+        delay(300);
+        player.volume(0);
+        delay(300);
+        player.pause();
+        counter_started = 0;
+        digitalWrite(LEDPin, LOW);
+      }
+
+      // Don't forget to update the previousMillis value
+      previousMillis = currentMillis;
+    }
+  }
+}
+
+TimedAction MainThread = TimedAction(100, Main_queue);
+
+
+//Main Setup
+void setup() {
+  // Init USB serial port for debugging
+  Serial.begin(9600);
+  // Init serial port for DFPlayer Mini
+  softwareSerial.begin(9600);
+
+  pinMode(LEDPinRadio, OUTPUT);
+  pinMode(LEDPin, OUTPUT);
+  pinMode(Movement, INPUT);
+
+  tml1637.init();
+  //Установка яркости горения сегментов
+  /*
+     BRIGHT_TYPICAL = 2 Средний
+     BRIGHT_DARKEST = 0 Тёмный
+     BRIGHTEST = 7      Яркий
+  */
+  tml1637.set(BRIGHT_TYPICAL);
+
+  tape = utf8rus("Resident Evil Save Room"); // Этот текст выводиться при включении или если в com-порт не пришла информация
+  matrix.setIntensity(7); // Яркость от 0 до 15
+  matrix.setRotation(matrix.getRotation()+3); //1 - 90  2 - 180   3 - 270
+
+  // Start communication with DFPlayer Mini
+  if (player.begin(softwareSerial)) {
+    Serial.println("Connected to Player");
+
+    player.enableLoop();
+    player.volume(20);
+    player.play(1);
+
+    delay(1000);
+    player.pause();
+
+  } else {
+    Serial.println("Connecting to DFPlayer Mini failed!");
+  }
+
+}
+
+
+
+//Main Loop
+void loop() {
+  unsigned long currentMillisLed = millis();
+  int second_num = Player_Track / 10;
+  int last_num = Player_Track % 10;
+  int second_num_vol = Player_Vol / 10;
+  int last_num_vol = Player_Vol % 10;
+  int8_t DispMSG[] = {3, 3, 3, 3};
+    tml1637.point(true);
+    //Выводим массив на дисплей
+    tml1637.display(DispMSG);
+
+  if (Serial.available()){
+    tape=Serial_Read();
+  }
+
+  for ( int i = 0 ; i < width * tape.length() + matrix.width() - 1 - spacer; i++ ){
+    MainThread.check();
+    ButtonThread.check();
+    Buttons(Player_Track, Player_Vol);
+    matrix.fillScreen(LOW);
+
+    int letter = i / width; // Номер символа выводимого на матрицу
+
+    int x = (matrix.width() - 1) - i % width;
+    int y = (matrix.height() - 8) / 2; // Центрируем текст по вертикали
+
+    while ( x + width - spacer >= 0 && letter >= 0 ) {
+
+      if ( letter < tape.length() ) {
+        matrix.drawChar(x, y, tape[letter], HIGH, LOW,1);
+      }
+      letter--;
+      x -= width;
+    }
+    matrix.write(); // Вывод сообщения на экран
+    delay(wait);
+  }
+}
+
+// void yield(){
+//   MainThread.check();
+//   ButtonThread.check();
+// }
+
+String utf8rus(String source){
+  int i,k;
+  String target;
+  unsigned char n;
+  char m[2] = { '0', '\0' };
+
+  k = source.length(); i = 0;
+  while (i < k) {
+    n = source[i]; i++;
+    if (n >= 0xC0) {
+      switch (n) {
+        case 0xD0: {
+          n = source[i]; i++;
+          if (n == 0x81) { n = 0xA8; break; }
+          if (n >= 0x90 && n <= 0xBF) n = n + 0x2F;
+          break;
+        }
+        case 0xD1: {
+          n = source[i]; i++;
+          if (n == 0x91) { n = 0xB7; break; }
+          if (n >= 0x80 && n <= 0x8F) n = n + 0x6F;
+          break;
+        }
+      }
+    }
+    m[0] = n; target = target + String(m);
+  }
+  return target;
+}
+/* Код для работы с com-портом */
+String Serial_Read() {
+  unsigned char c; // переменная для чтения сериал порта
+  String Serial_string = ""; // Формируемая из символов строка
+  while (Serial.available() > 0) { // Если в сериал порту есть символы
+    c = Serial.read(); // Читаем символ
+    //Serial.print(c,HEX); Serial.print(" "); Serial.print(c);
+    if (c == '\n') {  // Если это конец строки
+          return Serial_string; // Возвращаем строку
+    }
+    if (c == 0xB8) c = c - 0x01;  // Коррекция кодов символа под таблицу ???? так как русские символы в таблице сдвинуты относительно стандартной кодировки utf на 1 символ
+    if (c >= 0xBF && c <= 0xFF) c = c - 0x01;
+    Serial_string = Serial_string + String(char(c)); //Добавить символ в строку
+  }
+  return Serial_string;
+}
